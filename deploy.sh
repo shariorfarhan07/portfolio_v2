@@ -36,6 +36,10 @@ SKIP_RELOAD=0
 EXCLUDES=(
   ".git" ".github" ".gitignore" ".thumbnail"
   "deploy.sh" "README.md" "node_modules" ".DS_Store" ".vscode" ".claude"
+  # Anchored to the root: a bare "game" would also match assets/game,
+  # which holds the sprites the site actually serves.
+  "./game"
+  "./Shariorfarhan.png"   # 1MB logo source; the web copies are assets/icons/*
 )
 
 # ----------------------------------------------------------------- utils ----

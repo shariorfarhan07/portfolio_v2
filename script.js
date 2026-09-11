@@ -922,56 +922,95 @@
     const GRAVITY = 0.0019;
     const JUMP_V = -0.66;
 
-    /* ---- Sprites: real SVG silhouettes (data URIs), drawn via drawImage.
-       Two dino frames alternate while running for a walking-leg feel;
-       two cactus variants (single stem / saguaro with arms) for variety. */
-    function svgImage(markup) {
+    // Scroll speed, in px/ms. ACCEL is tuned so the run still reaches top
+    // speed about 100s in, the same ramp as before, just gentler throughout.
+    const START_SPEED = 0.19;
+    const MAX_SPEED = 0.46;
+    const ACCEL = 0.0000026;
+
+    /* ---- Sprites.
+       The runner is an 8-frame pixel-art strip of me, extracted from a
+       contact sheet into one horizontal PNG (all frames share a baseline
+       and a centre anchor, so it runs in place). Cacti stay inline SVG. */
+    function fileImage(src) {
       const img = new Image();
-      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(markup);
+      img.src = src;
       return img;
     }
-    const DINO_SVG_RAW = `<svg height="2500" viewBox="13.848000000000003 0 283.6449999999999 305.4" width="2328" xmlns="http://www.w3.org/2000/svg"><g fill="none" fill-rule="evenodd"><path d="M269.352 91.664h-42.436V80.04h70.577v-65.73h-14.294V0H168.4v14.309h-13.848v91.664H140.26v13.861h-20.994v14.309H98.271v14.308H83.977v13.862H58.069v-14.309H44.222v-13.861H29.928v-28.17h-16.08v86.746h13.847v14.308h14.293v13.862h13.848v14.308H70.13v13.862h13.847v56.34h30.375V289.3h-13.848V277.23h13.848v-13.862h14.294V249.06h11.613v14.308h14.294V305.4h30.375V289.3h-14.294v-54.104h14.294V220.89h13.847v-21.016h14.294v-49.186h11.614v13.862h16.527v-30.406h-28.14v-25.934h56.282z" fill="__FILL__"></path><path d="M182.248 20.569h16.974V37.56h-16.974z" fill="__EYE__"></path></g></svg>`;
-    const DINO_COLOR = "#2563eb";
-    const DINO_DEAD_COLOR = "#9aa4b2";
-    function dinoSvg(color, eyeColor) {
-      return DINO_SVG_RAW.replace("__FILL__", color).replace("__EYE__", eyeColor);
-    }
-    const dinoFrames = [svgImage(dinoSvg(DINO_COLOR, "#ffffff"))];
-    const dinoFramesDead = [svgImage(dinoSvg(DINO_DEAD_COLOR, "#e4e6ea"))];
 
-    const CACTUS_COLOR = "#3d434d";
-    const cactusSmallSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 32">
-      <rect fill="${CACTUS_COLOR}" x="9" y="4" width="6" height="28" rx="3"/>
-      <rect fill="${CACTUS_COLOR}" x="2" y="12" width="6" height="14" rx="3"/>
-    </svg>`;
-    const cactusTallSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 26 44">
-      <rect fill="${CACTUS_COLOR}" x="10" y="2" width="6" height="42" rx="3"/>
-      <rect fill="${CACTUS_COLOR}" x="2" y="14" width="6" height="20" rx="3"/>
-      <rect fill="${CACTUS_COLOR}" x="18" y="9" width="6" height="18" rx="3"/>
-    </svg>`;
-    const cactusSmall = svgImage(cactusSmallSvg);
-    const cactusTall = svgImage(cactusTallSvg);
+    const RUN_FRAMES = 8;
+    const RUN_FPS = 14;           // stride rate at RUN_REF_SPEED
+    // Calibrates stride *length*: the leg cycle is driven by distance
+    // travelled, so this stays fixed when the game's speed is retuned —
+    // otherwise the feet would start skating against the ground.
+    const RUN_REF_SPEED = 0.24;
+    const runnerSprite = new Image();
+    runnerSprite.src = "assets/images/farhan-run.png";
+    // Frame box is derived from the loaded strip, so re-exporting the
+    // sprite at a different resolution needs no code change here.
+    let runFrameW = 0, runFrameH = 0;
+    runnerSprite.addEventListener("load", () => {
+      runFrameW = runnerSprite.naturalWidth / RUN_FRAMES;
+      runFrameH = runnerSprite.naturalHeight;
+    });
+    let runPhase = 0;             // advances with distance travelled
 
-    let dino, obstacles, speed, score, best = 0, dead, auto, idleTimer, last;
+    /* Obstacles and scenery are pixel-art SVGs trimmed to their content box,
+       so a sprite's drawn rectangle *is* its silhouette — no invisible
+       padding to throw the collision box off. Aspects come from those boxes. */
+    const CACTI = [
+      { img: fileImage("assets/game/cactus_left.svg"), aspect: 110 / 159 },
+      { img: fileImage("assets/game/cactus_right.svg"), aspect: 95 / 156 },
+    ];
+    const CLOUDS = [
+      { img: fileImage("assets/game/cloud_left.svg"), aspect: 206 / 68 },
+      { img: fileImage("assets/game/cloud_right.svg"), aspect: 196 / 69 },
+    ];
+    const CACTUS_H = { small: 38, tall: 54 };
+
+    let dino, obstacles, clouds, speed, score, best = 0, dead, auto, idleTimer, last;
 
     function reset() {
-      dino = { y: GROUND_Y, vy: 0, w: 30, h: 42, onGround: true };
+      // w/h match the sprite's 0.65 aspect so the runner never squashes.
+      dino = { y: GROUND_Y, vy: 0, w: 38, h: 58, onGround: true };
+      runPhase = 0;
       obstacles = [];
-      speed = 0.24;
+      clouds = [];
+      speed = START_SPEED;
       score = 0;
       dead = false;
       last = null;
       spawnObstacle(560);
+      // Seed the sky so the widget never starts on an empty horizon.
+      spawnCloud(90);
+      spawnCloud(330);
+      spawnCloud(540);
       updateHud();
     }
 
     function spawnObstacle(atX) {
-      const tall = Math.random() < 0.35;
+      const kind = CACTI[(Math.random() * CACTI.length) | 0];
+      const h = Math.random() < 0.35 ? CACTUS_H.tall : CACTUS_H.small;
       obstacles.push({
         x: atX ?? W + 30,
-        w: tall ? 20 : 18,
-        h: tall ? 40 : 26,
-        sprite: tall ? cactusTall : cactusSmall,
+        w: Math.round(h * kind.aspect),
+        h,
+        sprite: kind.img,
+      });
+    }
+
+    function spawnCloud(atX) {
+      const kind = CLOUDS[(Math.random() * CLOUDS.length) | 0];
+      const w = 52 + Math.random() * 32;
+      clouds.push({
+        x: atX ?? W + 40,
+        y: 10 + Math.random() * 56,          // upper band, clear of the ground
+        w,
+        h: w / kind.aspect,
+        // Parallax: clouds drift at a fraction of the ground speed, so the
+        // horizon reads as far away rather than sliding with the cacti.
+        drift: 0.16 + Math.random() * 0.14,
+        sprite: kind.img,
       });
     }
 
@@ -1008,9 +1047,18 @@
         const next = obstacles.find((o) => o.x + o.w > dinoFrontX);
         if (next && dino.onGround) {
           const gap = next.x - dinoFrontX;
-          const reactionWindow = 90 + speed * 170;
+          // Jump at a fixed *time* before impact, not a fixed distance:
+          // the old `90 + speed * 170` fired far too early at the opening
+          // speed, so the runner landed while still over the cactus.
+          const reactionWindow = speed * 240;
           if (gap < reactionWindow && gap > -6) jump();
         }
+      }
+
+      // Run cycle — tied to scroll speed so the legs match the ground,
+      // and frozen mid-stride while airborne.
+      if (dino.onGround && !dead) {
+        runPhase = (runPhase + dt * 0.001 * RUN_FPS * (speed / RUN_REF_SPEED)) % RUN_FRAMES;
       }
 
       // Physics
@@ -1023,15 +1071,24 @@
       }
 
       // Obstacles
-      speed = Math.min(speed + 0.0000035 * dt, 0.6);
+      speed = Math.min(speed + ACCEL * dt, MAX_SPEED);
+
+      // Clouds (scenery only — never collided against)
+      clouds.forEach((c) => { c.x -= speed * c.drift * dt; });
+      if (clouds.length && clouds[0].x + clouds[0].w < -10) clouds.shift();
+      if (!clouds.length || clouds[clouds.length - 1].x < W - (200 + Math.random() * 240)) {
+        spawnCloud();
+      }
+
       obstacles.forEach((o) => { o.x -= speed * dt; });
       if (obstacles.length && obstacles[0].x < -30) obstacles.shift();
       if (!obstacles.length || obstacles[obstacles.length - 1].x < W - (170 + Math.random() * 160)) {
         spawnObstacle();
       }
 
-      // Collision (small forgiving hitbox, matches the dino's drawn position)
-      const dLeft = 26 + 4, dRight = 26 + dino.w - 6;
+      // Collision (small forgiving hitbox around the torso, ignoring the
+      // arms and trailing leg that swing outside the body on some frames)
+      const dLeft = 26 + 8, dRight = 26 + dino.w - 8;
       const dTop = dino.y - dino.h + 4;
       obstacles.forEach((o) => {
         const oTop = GROUND_Y - o.h;
@@ -1051,6 +1108,13 @@
     function draw() {
       ctx.clearRect(0, 0, W, H);
 
+      // Clouds first — they sit behind everything else
+      clouds.forEach((c) => {
+        if (c.sprite.complete && c.sprite.naturalWidth) {
+          ctx.drawImage(c.sprite, Math.round(c.x), Math.round(c.y), c.w, c.h);
+        }
+      });
+
       // Ground line — flush with the widget's own bottom rule
       ctx.strokeStyle = "rgba(107,114,128,0.35)";
       ctx.lineWidth = 1.5;
@@ -1059,18 +1123,30 @@
       ctx.lineTo(W, GROUND_Y + 1);
       ctx.stroke();
 
-      // Dino — the real dinosaur-game silhouette, with a tiny running bob
-      const dx = 26, dy = dino.y - dino.h - (dead || !dino.onGround ? 0 : Math.sin(performance.now() / 90) * 1.4);
-      const frames = dead ? dinoFramesDead : dinoFrames;
-      const sprite = frames[0];
-      if (sprite.complete && sprite.naturalWidth) {
-        ctx.drawImage(sprite, dx, dy, dino.w, dino.h);
+      // Runner — 8-frame sprite strip. The animation itself carries the
+      // bob, so no extra sine wobble is layered on top.
+      const dx = 26, dy = dino.y - dino.h;
+      if (runnerSprite.complete && runFrameW) {
+        // Airborne holds frame 3 (a good extended-stride pose); death
+        // holds frame 0 and fades out.
+        let f = Math.floor(runPhase) % RUN_FRAMES;
+        if (dead) f = 0;
+        else if (!dino.onGround) f = 3;
+
+        ctx.save();
+        if (dead) ctx.globalAlpha = 0.45;
+        ctx.drawImage(
+          runnerSprite,
+          f * runFrameW, 0, runFrameW, runFrameH,
+          Math.round(dx), Math.round(dy), dino.w, dino.h
+        );
+        ctx.restore();
       }
 
       // Obstacles — real SVG cactus sprites
       obstacles.forEach((o) => {
         if (o.sprite.complete && o.sprite.naturalWidth) {
-          ctx.drawImage(o.sprite, o.x, GROUND_Y - o.h, o.w, o.h);
+          ctx.drawImage(o.sprite, Math.round(o.x), GROUND_Y - o.h, o.w, o.h);
         }
       });
 
